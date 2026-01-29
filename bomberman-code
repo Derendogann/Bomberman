@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mini Bomberman</title>
+  <style>
+    body { margin:0; background:#0f1220; color:#eaeaea; font-family: system-ui, -apple-system, Segoe UI, Roboto; }
+    .wrap { display:flex; gap:16px; padding:16px; align-items:flex-start; }
+    canvas { background:#12162a; border:1px solid #2b335a; border-radius:12px; }
+    .panel { max-width:340px; line-height:1.5; }
+    .kbd { padding:2px 6px; border:1px solid #444; border-bottom-width:2px; border-radius:6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="c" width="640" height="640"></canvas>
+    <div class="panel">
+      <h2>Mini Bomberman</h2>
+      <p>
+        Hareket: <span class="kbd">WASD</span> / <span class="kbd">←↑↓→</span><br/>
+        Bomba: <span class="kbd">Space</span>
+      </p>
+      <p>Duvarlar kırılmaz, kutular kırılır. Patlamaya yakalanırsan ölürsün (R ile reset).</p>
+      <p id="status"></p>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  const statusEl = document.getElementById("status");
+
+  // ---- Grid / tiles ----
+  const TILE = 40;                 // 16x16 => 640px
+  const W = 16, H = 16;
+
+  // Tile types
+  const T = { EMPTY:0, WALL:1, BOX:2 };
+
+  // Create classic-ish Bomberman map:
+  // - border walls
+  // - checkerboard inner walls
+  // - random boxes
+  const map = Array.from({length:H}, (_, y) =>
+    Array.from({length:W}, (_, x) => {
+      if (x===0 || y===0 || x===W-1 || y===H-1) return T.WALL;
+      if (x%2===0 && y%2===0) return T.WALL;
+      return T.EMPTY;
+    })
+  );
+
+  // Keep a "safe spawn" region for player
+  const safe = new Set(["1,1","1,2","2,1"]);
+
+  // Add boxes randomly
+  for (let y=1; y<H-1; y++){
+    for (let x=1; x<W-1; x++){
+      const key = `${x},${y}`;
+      if (safe.has(key)) continue;
+      if (map[y][x] === T.EMPTY && Math.random() < 0.55) map[y][x] = T.BOX;
+    }
+  }
+
+  // ---- Player ----
+  const player = {
+    x: 1, y: 1,            // tile coords
+    alive: true,
+    bombsMax: 1,
+    bombRange: 2,
+  };
+
+  // ---- Bombs / flames ----
+  const bombs = [];   // {x,y, placedAt, fuseMs}
+  const flames = [];  // {x,y, until}
+
+  const now = () => performance.now();
+
+  function isBlocked(x,y){
+    // outside or wall/box or bomb (bomb blocks movement)
+    if (x<0||y<0||x>=W||y>=H) return true;
+    if (map[y][x] === T.WALL) return true;
+    if (map[y][x] === T.BOX) return true;
+    if (bombs.some(b => b.x===x && b.y===y)) return true;
+    return false;
+  }
+
+  function placeBomb(){
+    if (!player.alive) return;
+    const active = bombs.filter(b => b.owner === "p").length;
+    if (active >= player.bombsMax) return;
+
+    // if already bomb on tile, ignore
+    if (bombs.some(b => b.x===player.x && b.y===player.y)) return;
+
+    bombs.push({
+      x: player.x, y: player.y,
+      owner: "p",
+      placedAt: now(),
+      fuseMs: 1200,
+      range: player.bombRange,
+    });
+  }
+
+  function addFlame(x,y, duration=250){
+    flames.push({x,y, until: now() + duration});
+    // If player in flame => dead
+    if (player.alive && player.x===x && player.y===y) {
+      player.alive = false;
+    }
+  }
+
+  function explodeBomb(b){
+    // Center
+    addFlame(b.x, b.y);
+
+    // 4 directions
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+    for (const [dx,dy] of dirs){
+      for (let i=1; i<=b.range; i++){
+        const nx = b.x + dx*i, ny = b.y + dy*i;
+        if (nx<0||ny<0||nx>=W||ny>=H) break;
+
+        if (map[ny][nx] === T.WALL) break;
+
+        addFlame(nx,ny);
+
+        if (map[ny][nx] === T.BOX){
+          // destroy box and stop propagation
+          map[ny][nx] = T.EMPTY;
+          break;
+        }
+
+        // Chain reaction: ignite other bombs
+        const other = bombs.find(ob => ob.x===nx && ob.y===ny);
+        if (other){
+          other.placedAt = -999999; // force explode next update
+        }
+      }
+    }
+  }
+
+  // ---- Input ----
+  const keys = new Set();
+  window.addEventListener("keydown", (e) => {
+    keys.add(e.code);
+    if (e.code === "Space") e.preventDefault();
+    if (e.code === "KeyR") reset();
+  });
+  window.addEventListener("keyup", (e) => keys.delete(e.code));
+
+  let moveCooldown = 0;
+  function handleMovement(dt){
+    if (!player.alive) return;
+    moveCooldown -= dt;
+    if (moveCooldown > 0) return;
+
+    const up    = keys.has("ArrowUp") || keys.has("KeyW");
+    const down  = keys.has("ArrowDown") || keys.has("KeyS");
+    const left  = keys.has("ArrowLeft") || keys.has("KeyA");
+    const right = keys.has("ArrowRight") || keys.has("KeyD");
+
+    let dx=0, dy=0;
+    if (up) dy = -1;
+    else if (down) dy = 1;
+    else if (left) dx = -1;
+    else if (right) dx = 1;
+
+    if (dx!==0 || dy!==0){
+      const nx = player.x + dx, ny = player.y + dy;
+      // allow stepping off a bomb tile you placed (classic behavior),
+      // but still block entering bomb tiles.
+      const enteringBomb = bombs.some(b => b.x===nx && b.y===ny);
+      const blocked = (nx<0||ny<0||nx>=W||ny>=H) ||
+                      map[ny][nx] === T.WALL ||
+                      map[ny][nx] === T.BOX ||
+                      enteringBomb;
+
+      if (!blocked){
+        player.x = nx; player.y = ny;
+        moveCooldown = 90; // ms per tile
+      }
+    }
+  }
+
+  function handleActions(){
+    if (keys.has("Space")){
+      placeBomb();
+      // prevent "hold-to-spam"
+      keys.delete("Space");
+    }
+  }
+
+  // ---- Render ----
+  function drawTile(x,y,type){
+    const px = x*TILE, py = y*TILE;
+
+    // ground
+    ctx.fillStyle = "#151b33";
+    ctx.fillRect(px, py, TILE, TILE);
+
+    // subtle grid
+    ctx.strokeStyle = "rgba(255,255,255,0.04)";
+    ctx.strokeRect(px+0.5, py+0.5, TILE-1, TILE-1);
+
+    if (type === T.WALL){
+      ctx.fillStyle = "#2d3568";
+      ctx.fillRect(px+2, py+2, TILE-4, TILE-4);
+    } else if (type === T.BOX){
+      ctx.fillStyle = "#7a4c2e";
+      ctx.fillRect(px+4, py+4, TILE-8, TILE-8);
+      ctx.fillStyle = "rgba(255,255,255,0.1)";
+      ctx.fillRect(px+8, py+8, TILE-16, TILE-16);
+    }
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    for (let y=0; y<H; y++){
+      for (let x=0; x<W; x++){
+        drawTile(x,y,map[y][x]);
+      }
+    }
+
+    // bombs
+    for (const b of bombs){
+      const cx = b.x*TILE + TILE/2, cy = b.y*TILE + TILE/2;
+      ctx.fillStyle = "#111";
+      ctx.beginPath(); ctx.arc(cx, cy, TILE*0.28, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = "#ffdd55";
+      ctx.beginPath(); ctx.arc(cx+6, cy-6, TILE*0.08, 0, Math.PI*2); ctx.fill();
+    }
+
+    // flames
+    const t = now();
+    for (const f of flames){
+      if (f.until < t) continue;
+      const px = f.x*TILE, py = f.y*TILE;
+      ctx.fillStyle = "rgba(255,170,40,0.55)";
+      ctx.fillRect(px+3, py+3, TILE-6, TILE-6);
+    }
+
+    // player
+    const px = player.x*TILE, py = player.y*TILE;
+    ctx.fillStyle = player.alive ? "#65d6ff" : "#ff5577";
+    ctx.beginPath();
+    ctx.arc(px+TILE/2, py+TILE/2, TILE*0.28, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // ---- Update loop ----
+  let last = now();
+  function tick(){
+    const t = now();
+    const dt = t - last; last = t;
+
+    handleMovement(dt);
+    handleActions();
+
+    // bomb fuses
+    for (let i=bombs.length-1; i>=0; i--){
+      const b = bombs[i];
+      if (t - b.placedAt >= b.fuseMs){
+        bombs.splice(i,1);
+        explodeBomb(b);
+      }
+    }
+
+    // flames expire
+    for (let i=flames.length-1; i>=0; i--){
+      if (flames[i].until < t) flames.splice(i,1);
+    }
+
+    // if player standing on flame (late check)
+    if (player.alive && flames.some(f => f.x===player.x && f.y===player.y && f.until>t)){
+      player.alive = false;
+    }
+
+    statusEl.textContent = player.alive
+      ? "Hayattasın. Kutuları kır, patlamadan kaç."
+      : "Öldün. Reset için R.";
+
+    draw();
+    requestAnimationFrame(tick);
+  }
+
+  function reset(){
+    // Quick page reload is easiest for this demo
+    location.reload();
+  }
+
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
