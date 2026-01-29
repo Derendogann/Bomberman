@@ -8,8 +8,9 @@
     body { margin:0; background:#0f1220; color:#eaeaea; font-family: system-ui, -apple-system, Segoe UI, Roboto; }
     .wrap { display:flex; gap:16px; padding:16px; align-items:flex-start; }
     canvas { background:#12162a; border:1px solid #2b335a; border-radius:12px; }
-    .panel { max-width:340px; line-height:1.5; }
+    .panel { max-width:360px; line-height:1.5; }
     .kbd { padding:2px 6px; border:1px solid #444; border-bottom-width:2px; border-radius:6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .small { opacity:.8; font-size: 13px; }
   </style>
 </head>
 <body>
@@ -22,7 +23,10 @@
         Bomba: <span class="kbd">Space</span><br/>
         Reset: <span class="kbd">R</span>
       </p>
-      <p>Duvarlar kırılmaz, kutular kırılır. Düşmanlar bitince sonraki levele geçersin.</p>
+      <p class="small">
+        Amaç: Kutuları patlat → <b>Anahtar</b>ı bul → <b>Düşmanları temizle</b> → <b>Kapıdan çık</b>.<br/>
+        Süre bitince <b>Sudden Death</b> başlar (kenarlardan alev).
+      </p>
       <p id="status"></p>
     </div>
   </div>
@@ -33,76 +37,43 @@
   const ctx = canvas.getContext("2d");
   const statusEl = document.getElementById("status");
 
-  const VERSION = "v2.1";
-  let screenShake = 0;  // ms
-  let shakeAmp = 0;     // px
-
-  // ---- Grid / tiles ----
-  const TILE = 40;                 // 16x16 => 640px
+  const VERSION = "v3.0";
+  const TILE = 40;  // 16x16 => 640
   const W = 16, H = 16;
 
   const T = { EMPTY:0, WALL:1, BOX:2 };
-
-  // ---- Time ----
   const now = () => performance.now();
 
-  // ---- Level definitions ----
-  // Legend:
-  // # = WALL, b = BOX, . = EMPTY
+  // --- Levels: difficulty ramps here ---
+  // boxDensity increases => more boxes => harder to reach enemies/exit
+  // enemySpeed lower => enemies move more often (harder)
+  // chaseFrom: level index from which enemies can line-chase
+  // avoidFrom: level index from which enemies avoid bomb danger
   const LEVELS = [
-    {
-      map: [
-        "################",
-        "#..bbbb..b.....#",
-        "#.#.#.#.#.#.#..#",
-        "#..b....b...b..#",
-        "#.#.#.#.#.#.#..#",
-        "#..b....b...b..#",
-        "#.#.#.#.#.#.#..#",
-        "#..b....b...b..#",
-        "#.#.#.#.#.#.#..#",
-        "#..b....b...b..#",
-        "#.#.#.#.#.#.#..#",
-        "#..b....b...b..#",
-        "#.#.#.#.#.#.#..#",
-        "#.....b....b...#",
-        "#..............#",
-        "################",
-      ],
-      playerSpawn: { x: 1, y: 1 },
-      enemies: [{ x: 14, y: 14 }, { x: 14, y: 1 }],
-    },
-    {
-      map: [
-        "################",
-        "#..bbbb..bbbb..#",
-        "#.#.#.#.#.#.#..#",
-        "#..b..b.....b..#",
-        "#.#.#.#.#.#.#..#",
-        "#..b....bbb.b..#",
-        "#.#.#.#.#.#.#..#",
-        "#..b..b.....b..#",
-        "#.#.#.#.#.#.#..#",
-        "#..b....bbb.b..#",
-        "#.#.#.#.#.#.#..#",
-        "#..b..b.....b..#",
-        "#.#.#.#.#.#.#..#",
-        "#..bbbb..bbbb..#",
-        "#..............#",
-        "################",
-      ],
-      playerSpawn: { x: 1, y: 1 },
-      enemies: [{ x: 14, y: 14 }, { x: 14, y: 1 }, { x: 1, y: 14 }],
-    }
+    { boxDensity: 0.55, enemies: 2, enemySpeed: 190, timeMs: 75_000 },
+    { boxDensity: 0.62, enemies: 3, enemySpeed: 175, timeMs: 70_000 },
+    { boxDensity: 0.68, enemies: 4, enemySpeed: 165, timeMs: 65_000 },
+    { boxDensity: 0.74, enemies: 5, enemySpeed: 150, timeMs: 60_000 },
+    { boxDensity: 0.78, enemies: 6, enemySpeed: 140, timeMs: 55_000 },
   ];
+  const CHASE_FROM = 1; // level 2+
+  const AVOID_FROM = 3; // level 4+
 
+  // --- Game state ---
   let currentLevel = 0;
-
-  // ---- World state (changes per level) ----
   let map = [];
   let enemies = [];
+  const bombs = [];    // {x,y, placedAt, fuseMs, range, owner}
+  const flames = [];   // {x,y, until}
+  const pickups = [];  // {x,y,type} type: 'BOMB'|'RANGE'|'SPEED'|'KEY'
+  let levelStartAt = 0;
 
-  // ---- Player ----
+  let exitPos = { x: 14, y: 14 };
+  let exitActive = false;
+  let hasKey = false;
+
+  let screenShake = 0, shakeAmp = 0;
+
   const player = {
     x: 1, y: 1,
     alive: true,
@@ -112,58 +83,224 @@
 
     bombsMax: 1,
     bombRange: 2,
+    moveDelay: 90, // lower = faster
   };
 
-  // ---- Bombs / flames ----
-  const bombs = [];   // {x,y, placedAt, fuseMs, range, owner}
-  const flames = [];  // {x,y, until}
-
-  function parseLevelMap(lines){
-    const m = Array.from({length:H}, () => Array.from({length:W}, () => T.EMPTY));
-    for (let y=0; y<H; y++){
-      const row = lines[y] || "";
-      for (let x=0; x<W; x++){
-        const ch = row[x] || ".";
-        if (ch === "#") m[y][x] = T.WALL;
-        else if (ch === "b") m[y][x] = T.BOX;
-        else m[y][x] = T.EMPTY;
-      }
-    }
-    return m;
+  // ---- Classic base map (Bomberman style) ----
+  function buildClassicBaseMap(){
+    return Array.from({length:H}, (_, y) =>
+      Array.from({length:W}, (_, x) => {
+        if (x===0 || y===0 || x===W-1 || y===H-1) return T.WALL;
+        if (x%2===0 && y%2===0) return T.WALL;
+        return T.EMPTY;
+      })
+    );
   }
 
-  function loadLevel(idx){
-    const L = LEVELS[idx];
-    if (!L){
-      statusEl.textContent = "Tebrikler! Tüm levellar bitti. R ile tekrar başlat.";
-      return;
-    }
+  function isInside(x,y){ return x>=0 && y>=0 && x<W && y<H; }
 
-    bombs.length = 0;
-    flames.length = 0;
-
-    map = parseLevelMap(L.map);
-
-    player.spawn = { ...L.playerSpawn };
-    player.x = player.spawn.x;
-    player.y = player.spawn.y;
-    player.alive = true;
-    player.invUntil = now() + 800;
-
-    enemies = L.enemies.map(e => ({
-      x: e.x, y: e.y,
-      alive: true,
-      moveCd: 0
-    }));
-  }
-
-  // ---- Collision ----
   function isBlocked(x,y){
-    if (x<0||y<0||x>=W||y>=H) return true;
+    if (!isInside(x,y)) return true;
     if (map[y][x] === T.WALL) return true;
     if (map[y][x] === T.BOX) return true;
     if (bombs.some(b => b.x===x && b.y===y)) return true;
     return false;
+  }
+
+  function shuffle(arr){
+    for (let i=arr.length-1; i>0; i--){
+      const j = (Math.random()*(i+1))|0;
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  function neighbors4(x,y){
+    return [[x+1,y],[x-1,y],[x,y+1],[x,y-1]].filter(([a,b]) => isInside(a,b));
+  }
+
+  // Flood fill over walkable cells (EMPTY only, ignoring bombs/flames)
+  function computeReachableFrom(sx,sy){
+    const seen = Array.from({length:H}, () => Array(W).fill(false));
+    const q = [[sx,sy]];
+    if (!isInside(sx,sy) || map[sy][sx] !== T.EMPTY) return seen;
+    seen[sy][sx] = true;
+    while(q.length){
+      const [x,y] = q.shift();
+      for (const [nx,ny] of neighbors4(x,y)){
+        if (seen[ny][nx]) continue;
+        if (map[ny][nx] !== T.EMPTY) continue;
+        seen[ny][nx] = true;
+        q.push([nx,ny]);
+      }
+    }
+    return seen;
+  }
+
+  function pickRandomEmpty(reachMask){
+    const cells = [];
+    for (let y=1; y<H-1; y++){
+      for (let x=1; x<W-1; x++){
+        if (map[y][x] !== T.EMPTY) continue;
+        if (reachMask && !reachMask[y][x]) continue;
+        cells.push([x,y]);
+      }
+    }
+    if (!cells.length) return {x:1,y:1};
+    const [x,y] = cells[(Math.random()*cells.length)|0];
+    return {x,y};
+  }
+
+  // Add boxes with: safe spawn, plus "enemy region blocked" feeling
+  function addBoxes(density, spawn){
+    const safe = new Set([
+      `${spawn.x},${spawn.y}`,
+      `${spawn.x+1},${spawn.y}`,
+      `${spawn.x},${spawn.y+1}`,
+      `${spawn.x+2},${spawn.y}`,
+      `${spawn.x},${spawn.y+2}`,
+    ]);
+
+    for (let y=1; y<H-1; y++){
+      for (let x=1; x<W-1; x++){
+        if (map[y][x] !== T.EMPTY) continue;
+        if (safe.has(`${x},${y}`)) continue;
+        if (Math.random() < density) map[y][x] = T.BOX;
+      }
+    }
+  }
+
+  // Carve guaranteed corridors to targets by clearing boxes along a Manhattan-ish path
+  function carvePath(from, to){
+    let x = from.x, y = from.y;
+    const steps = [];
+    while (x !== to.x || y !== to.y){
+      if (x < to.x) x++;
+      else if (x > to.x) x--;
+      else if (y < to.y) y++;
+      else if (y > to.y) y--;
+      steps.push([x,y]);
+      // random slight wiggle sometimes
+      if (Math.random() < 0.12){
+        const wig = shuffle([[1,0],[-1,0],[0,1],[0,-1]]).find(([dx,dy]) => isInside(x+dx,y+dy));
+        if (wig){
+          const [dx,dy] = wig;
+          steps.push([x+dx,y+dy]);
+        }
+      }
+    }
+    for (const [px,py] of steps){
+      if (map[py][px] === T.BOX) map[py][px] = T.EMPTY;
+    }
+  }
+
+  // Place N enemies in areas generally far from spawn; they start "behind boxes"
+  function spawnEnemies(n, spawn){
+    const reach = computeReachableFrom(spawn.x, spawn.y);
+    // Prefer NOT reachable cells, but still empty.
+    const far = [];
+    const near = [];
+    for (let y=1; y<H-1; y++){
+      for (let x=1; x<W-1; x++){
+        if (map[y][x] !== T.EMPTY) continue;
+        const d = Math.abs(x-spawn.x) + Math.abs(y-spawn.y);
+        if (!reach[y][x] && d > 10) far.push([x,y]);
+        else if (d > 8) near.push([x,y]);
+      }
+    }
+    shuffle(far); shuffle(near);
+    const chosen = [];
+    while (chosen.length < n && (far.length || near.length)){
+      const src = far.length ? far : near;
+      const [x,y] = src.shift();
+      // keep space between enemies
+      if (chosen.some(e => Math.abs(e.x-x)+Math.abs(e.y-y) < 3)) continue;
+      chosen.push({x,y});
+    }
+    enemies = chosen.map(e => ({...e, alive:true, moveCd:0}));
+  }
+
+  // Ensure there is at least one reachable corridor to exit area (you'll still need boxes to move around)
+  function setupExit(spawn){
+    // Exit position: pick a far empty tile; if not possible, fallback
+    const reach = computeReachableFrom(spawn.x, spawn.y);
+    // Choose a far tile that is EMPTY and not too close to spawn
+    let best = null, bestD = -1;
+    for (let y=1; y<H-1; y++){
+      for (let x=1; x<W-1; x++){
+        if (map[y][x] !== T.EMPTY) continue;
+        const d = Math.abs(x-spawn.x) + Math.abs(y-spawn.y);
+        if (d > bestD){ bestD = d; best = {x,y}; }
+      }
+    }
+    exitPos = best || {x:14,y:14};
+    exitActive = false;
+    hasKey = false;
+
+    // carve a light path so it's not impossible (still mostly boxy)
+    carvePath(spawn, exitPos);
+
+    // place KEY: put it as a pickup hidden under a random BOX reachable via exploration
+    // Implementation: mark a random BOX cell as "keyBox" and spawn KEY when that box breaks.
+    // We'll store it in levelKeyBox and check when breaking a box.
+    const reachableNow = computeReachableFrom(spawn.x, spawn.y);
+    const candidateBoxes = [];
+    for (let y=1; y<H-1; y++){
+      for (let x=1; x<W-1; x++){
+        if (map[y][x] !== T.BOX) continue;
+        // Put key in box that is "somewhat reachable soon": adjacent to empty reachable tile
+        const adj = neighbors4(x,y).some(([ax,ay]) => map[ay][ax] === T.EMPTY && reachableNow[ay][ax]);
+        if (adj) candidateBoxes.push([x,y]);
+      }
+    }
+    shuffle(candidateBoxes);
+    if (!candidateBoxes.length){
+      // fallback: just spawn key as pickup on reachable empty
+      const pos = pickRandomEmpty(reachableNow);
+      pickups.push({x:pos.x, y:pos.y, type:"KEY"});
+      levelKeyBox = null;
+    } else {
+      const [kx,ky] = candidateBoxes[0];
+      levelKeyBox = {x:kx, y:ky}; // when this box breaks -> spawn KEY pickup
+    }
+  }
+
+  let levelKeyBox = null;
+
+  function loadLevel(idx){
+    const L = LEVELS[idx];
+    if (!L){
+      return;
+    }
+
+    // Reset transient objects
+    bombs.length = 0;
+    flames.length = 0;
+    pickups.length = 0;
+
+    // Base map + boxes
+    map = buildClassicBaseMap();
+
+    // Spawn fixed for classic
+    player.spawn = {x:1,y:1};
+    player.x = player.spawn.x;
+    player.y = player.spawn.y;
+    player.alive = true;
+    player.invUntil = now() + 900;
+
+    addBoxes(L.boxDensity, player.spawn);
+
+    // Spawn enemies behind the boxy world
+    spawnEnemies(L.enemies, player.spawn);
+
+    // Exit + key system
+    setupExit(player.spawn);
+
+    // Timer
+    levelStartAt = now();
+
+    // Slightly ramp player baseline too (optional): keep it fair
+    // (We keep bombsMax/range/speed persistent across levels like classic)
   }
 
   // ---- Damage / Lives ----
@@ -174,7 +311,6 @@
 
     player.lives -= 1;
 
-    // küçük hit feedback
     screenShake = 120;
     shakeAmp = 4;
 
@@ -188,34 +324,49 @@
     player.invUntil = t + 1500;
   }
 
-  // ---- Bomb placement ----
+  // ---- Bombs / Flames ----
   function placeBomb(){
     if (!player.alive) return;
+
     const active = bombs.filter(b => b.owner === "p").length;
     if (active >= player.bombsMax) return;
+
     if (bombs.some(b => b.x===player.x && b.y===player.y)) return;
 
     bombs.push({
       x: player.x, y: player.y,
       owner: "p",
       placedAt: now(),
-      fuseMs: 900,
+      fuseMs: 900,            // ✅ classic but more akıcı
       range: player.bombRange,
     });
   }
 
-  function addFlame(x,y, duration=250){
+  function addFlame(x,y, duration=260){
     flames.push({x,y, until: now() + duration});
-
     if (player.x===x && player.y===y) damagePlayer();
-
     for (const e of enemies){
       if (e.alive && e.x===x && e.y===y) e.alive = false;
     }
   }
 
+  function spawnPickupFromBox(x,y){
+    // KEY is special: guaranteed once per level from levelKeyBox
+    if (levelKeyBox && levelKeyBox.x === x && levelKeyBox.y === y){
+      pickups.push({x,y,type:"KEY"});
+      levelKeyBox = null;
+      return;
+    }
+
+    // Power-up chances (tuneable)
+    // Lower chance early => excitement when it drops
+    const r = Math.random();
+    if (r < 0.10) pickups.push({x,y,type:"BOMB"});
+    else if (r < 0.20) pickups.push({x,y,type:"RANGE"});
+    else if (r < 0.28) pickups.push({x,y,type:"SPEED"});
+  }
+
   function explodeBomb(b){
-    // explosion feedback
     screenShake = 160;
     shakeAmp = 6;
 
@@ -225,14 +376,14 @@
     for (const [dx,dy] of dirs){
       for (let i=1; i<=b.range; i++){
         const nx = b.x + dx*i, ny = b.y + dy*i;
-        if (nx<0||ny<0||nx>=W||ny>=H) break;
-
+        if (!isInside(nx,ny)) break;
         if (map[ny][nx] === T.WALL) break;
 
         addFlame(nx,ny);
 
         if (map[ny][nx] === T.BOX){
           map[ny][nx] = T.EMPTY;
+          spawnPickupFromBox(nx,ny); // ✅ box break can drop stuff
           break;
         }
 
@@ -244,25 +395,149 @@
     }
   }
 
-  // ---- Enemies ----
+  // ---- Pickups ----
+  function applyPickup(p){
+    if (p.type === "BOMB") player.bombsMax = Math.min(6, player.bombsMax + 1);
+    if (p.type === "RANGE") player.bombRange = Math.min(6, player.bombRange + 1);
+    if (p.type === "SPEED") player.moveDelay = Math.max(55, player.moveDelay - 8);
+    if (p.type === "KEY") hasKey = true;
+  }
+
+  function updatePickups(){
+    // collect if player stands on it
+    for (let i=pickups.length-1; i>=0; i--){
+      const p = pickups[i];
+      if (p.x===player.x && p.y===player.y){
+        applyPickup(p);
+        pickups.splice(i,1);
+        screenShake = 70; shakeAmp = 2;
+      }
+    }
+  }
+
+  // ---- Enemy AI helpers ----
+  function cellIsDanger(x,y){
+    // Danger if there is a bomb that will explode soon and cell is in range with no wall in between
+    const t = now();
+    for (const b of bombs){
+      const timeLeft = b.fuseMs - (t - b.placedAt);
+      if (timeLeft > 650) continue; // only worry near explosion
+      if (x===b.x && y===b.y) return true;
+      // same row/col within range
+      if (x===b.x){
+        const dy = y > b.y ? 1 : -1;
+        const dist = Math.abs(y-b.y);
+        if (dist <= b.range){
+          let blocked = false;
+          for (let i=1;i<=dist;i++){
+            const yy = b.y + dy*i;
+            if (map[yy][x] === T.WALL) { blocked = true; break; }
+            if (map[yy][x] === T.BOX) { blocked = true; break; }
+          }
+          if (!blocked) return true;
+        }
+      }
+      if (y===b.y){
+        const dx = x > b.x ? 1 : -1;
+        const dist = Math.abs(x-b.x);
+        if (dist <= b.range){
+          let blocked = false;
+          for (let i=1;i<=dist;i++){
+            const xx = b.x + dx*i;
+            if (map[y][xx] === T.WALL) { blocked = true; break; }
+            if (map[y][xx] === T.BOX) { blocked = true; break; }
+          }
+          if (!blocked) return true;
+        }
+      }
+    }
+    // also danger if flame currently here
+    if (flames.some(f => f.x===x && f.y===y && f.until>t)) return true;
+    return false;
+  }
+
+  function hasLineOfSight(ax,ay,bx,by){
+    if (ax===bx){
+      const step = by>ay ? 1 : -1;
+      for (let y=ay+step; y!==by; y+=step){
+        if (map[y][ax] === T.WALL || map[y][ax] === T.BOX) return false;
+      }
+      return true;
+    }
+    if (ay===by){
+      const step = bx>ax ? 1 : -1;
+      for (let x=ax+step; x!==bx; x+=step){
+        if (map[ay][x] === T.WALL || map[ay][x] === T.BOX) return false;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function chooseEnemyMove(e, levelIdx){
+    const dirs = shuffle([[1,0],[-1,0],[0,1],[0,-1]]);
+    const canAvoid = levelIdx >= AVOID_FROM;
+    const canChase = levelIdx >= CHASE_FROM;
+
+    // If in danger and can avoid -> move to a safe tile if possible
+    if (canAvoid && cellIsDanger(e.x,e.y)){
+      for (const [dx,dy] of dirs){
+        const nx = e.x+dx, ny = e.y+dy;
+        if (isBlocked(nx,ny)) continue;
+        if (!cellIsDanger(nx,ny)) return [dx,dy];
+      }
+      // if no safe, still move randomly if can
+      for (const [dx,dy] of dirs){
+        const nx = e.x+dx, ny = e.y+dy;
+        if (!isBlocked(nx,ny)) return [dx,dy];
+      }
+      return [0,0];
+    }
+
+    // Chase if line-of-sight in same row/col and closer
+    if (canChase && hasLineOfSight(e.x,e.y,player.x,player.y)){
+      if (e.x===player.x) return [0, player.y>e.y ? 1 : -1];
+      if (e.y===player.y) return [player.x>e.x ? 1 : -1, 0];
+    }
+
+    // Mild bias: sometimes move closer to player
+    if (canChase && Math.random() < 0.35){
+      const best = dirs
+        .map(([dx,dy]) => {
+          const nx=e.x+dx, ny=e.y+dy;
+          if (isBlocked(nx,ny)) return null;
+          const score = Math.abs(player.x-nx)+Math.abs(player.y-ny);
+          return {dx,dy,score};
+        })
+        .filter(Boolean)
+        .sort((a,b)=>a.score-b.score)[0];
+      if (best) return [best.dx,best.dy];
+    }
+
+    // Random move
+    for (const [dx,dy] of dirs){
+      const nx = e.x+dx, ny = e.y+dy;
+      if (!isBlocked(nx,ny)) return [dx,dy];
+    }
+    return [0,0];
+  }
+
   function updateEnemies(dt){
+    const L = LEVELS[currentLevel];
+    const speed = L.enemySpeed ?? 170;
+
     for (const e of enemies){
       if (!e.alive) continue;
       e.moveCd -= dt;
       if (e.moveCd > 0) continue;
 
-      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
-      dirs.sort(() => Math.random() - 0.5);
-
-      for (const [dx,dy] of dirs){
-        const nx = e.x + dx, ny = e.y + dy;
-        if (!isBlocked(nx, ny)){
-          e.x = nx; e.y = ny;
-          break;
-        }
+      const [dx,dy] = chooseEnemyMove(e, currentLevel);
+      const nx = e.x + dx, ny = e.y + dy;
+      if (!isBlocked(nx,ny)){
+        e.x = nx; e.y = ny;
       }
 
-      e.moveCd = 170;
+      e.moveCd = speed;
     }
   }
 
@@ -302,7 +577,7 @@
 
       if (!blocked){
         player.x = nx; player.y = ny;
-        moveCooldown = 90;
+        moveCooldown = player.moveDelay;
       }
     }
   }
@@ -314,23 +589,38 @@
     }
   }
 
+  // ---- Sudden death ----
+  function applySuddenDeath(t){
+    const L = LEVELS[currentLevel];
+    const timeLeft = (L.timeMs ?? 60_000) - (t - levelStartAt);
+    if (timeLeft > 0) return;
+
+    // every 700ms, shrink border inward
+    const k = Math.min(7, Math.floor((-timeLeft)/700));
+    // flames at border ring k
+    for (let x=0; x<W; x++){
+      addFlame(x, k, 220);
+      addFlame(x, H-1-k, 220);
+    }
+    for (let y=0; y<H; y++){
+      addFlame(k, y, 220);
+      addFlame(W-1-k, y, 220);
+    }
+  }
+
   // ---- Render ----
   function drawTile(x,y,type){
     const px = x*TILE, py = y*TILE;
 
-    // ground
     ctx.fillStyle = "#141a31";
     ctx.fillRect(px, py, TILE, TILE);
 
-    // MUCH softer grid (optional)
     ctx.strokeStyle = "rgba(255,255,255,0.015)";
     ctx.strokeRect(px+0.5, py+0.5, TILE-1, TILE-1);
 
     if (type === T.WALL){
       ctx.fillStyle = "#2d3568";
       ctx.fillRect(px+2, py+2, TILE-4, TILE-4);
-
-      // shadow strip
       ctx.fillStyle = "rgba(0,0,0,0.18)";
       ctx.fillRect(px+2, py+TILE-6, TILE-4, 4);
     } else if (type === T.BOX){
@@ -338,8 +628,6 @@
       ctx.fillRect(px+4, py+4, TILE-8, TILE-8);
       ctx.fillStyle = "rgba(255,255,255,0.10)";
       ctx.fillRect(px+8, py+8, TILE-16, TILE-16);
-
-      // shadow strip
       ctx.fillStyle = "rgba(0,0,0,0.18)";
       ctx.fillRect(px+4, py+TILE-8, TILE-8, 4);
     }
@@ -347,17 +635,21 @@
 
   function drawHUD(){
     const aliveEnemies = enemies.filter(e => e.alive).length;
+    const L = LEVELS[currentLevel];
+    const left = Math.max(0, (L.timeMs ?? 60_000) - (now() - levelStartAt));
+    const sec = Math.ceil(left/1000);
 
     ctx.save();
-    ctx.globalAlpha = 0.9;
+    ctx.globalAlpha = 0.92;
     ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.fillRect(10, 10, 320, 74);
+    ctx.fillRect(10, 10, 420, 96);
 
     ctx.globalAlpha = 1;
     ctx.fillStyle = "#eaeaea";
     ctx.font = "16px system-ui";
     ctx.fillText(`Mini Bomberman ${VERSION}`, 20, 34);
-    ctx.fillText(`Level: ${currentLevel + 1}   Can: ${player.lives}   Düşman: ${aliveEnemies}`, 20, 58);
+    ctx.fillText(`Level: ${currentLevel + 1}/${LEVELS.length}   Can: ${player.lives}   Düşman: ${aliveEnemies}`, 20, 58);
+    ctx.fillText(`🧨 ${player.bombsMax}   🔥 ${player.bombRange}   ⚡ ${Math.round((90/player.moveDelay)*100)}%   🔑 ${hasKey ? "Var" : "Yok"}   ⏱️ ${sec}s`, 20, 82);
     ctx.restore();
   }
 
@@ -369,14 +661,14 @@
     ctx.font = "30px system-ui";
     ctx.fillText(title, 210, 310);
     ctx.font = "16px system-ui";
-    ctx.fillText(subtitle, 230, 342);
+    ctx.fillText(subtitle, 170, 342);
     ctx.restore();
   }
 
   function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
 
-    // screen shake
+    // shake
     ctx.save();
     if (screenShake > 0){
       const ax = (Math.random()*2 - 1) * shakeAmp;
@@ -390,12 +682,40 @@
       }
     }
 
-    // bombs (pulsing)
+    // Exit tile (always show faint), active is brighter
+    {
+      const px = exitPos.x*TILE, py = exitPos.y*TILE;
+      ctx.fillStyle = exitActive ? "rgba(180,120,255,0.75)" : "rgba(180,120,255,0.22)";
+      ctx.fillRect(px+6, py+6, TILE-12, TILE-12);
+      if (exitActive){
+        ctx.fillStyle = "rgba(255,255,255,0.18)";
+        ctx.fillRect(px+12, py+12, TILE-24, TILE-24);
+      }
+    }
+
+    // Pickups
+    for (const p of pickups){
+      const px = p.x*TILE, py = p.y*TILE;
+      if (p.type === "BOMB") ctx.fillStyle = "rgba(255,230,90,0.90)";
+      else if (p.type === "RANGE") ctx.fillStyle = "rgba(255,140,60,0.90)";
+      else if (p.type === "SPEED") ctx.fillStyle = "rgba(120,255,200,0.90)";
+      else if (p.type === "KEY") ctx.fillStyle = "rgba(255,255,255,0.95)";
+
+      ctx.beginPath();
+      ctx.roundRect(px+10, py+10, TILE-20, TILE-20, 6);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.font = "14px system-ui";
+      const label = p.type === "BOMB" ? "B" : p.type === "RANGE" ? "R" : p.type === "SPEED" ? "S" : "K";
+      ctx.fillText(label, px+TILE/2 - 4, py+TILE/2 + 6);
+    }
+
+    // bombs (pulse)
     const t = now();
     for (const b of bombs){
       const cx = b.x*TILE + TILE/2, cy = b.y*TILE + TILE/2;
-
-      const pulse = 1 + 0.16 * Math.sin((t - b.placedAt) / 70);
+      const pulse = 1 + 0.12 * Math.sin((t - b.placedAt) / 80);
       const r = TILE * 0.28 * pulse;
 
       ctx.fillStyle = "#111";
@@ -408,11 +728,9 @@
     for (const f of flames){
       if (f.until < t) continue;
       const px = f.x*TILE, py = f.y*TILE;
-
       ctx.fillStyle = "rgba(255,255,255,0.08)";
       ctx.fillRect(px+1, py+1, TILE-2, TILE-2);
-
-      const flick = 0.45 + 0.15 * Math.sin((t + (f.x*13 + f.y*7)) / 35);
+      const flick = 0.45 + 0.18 * Math.sin((t + (f.x*13 + f.y*7)) / 35);
       ctx.fillStyle = `rgba(255,170,40,${flick})`;
       ctx.fillRect(px+3, py+3, TILE-6, TILE-6);
     }
@@ -421,25 +739,23 @@
     for (const e of enemies){
       if (!e.alive) continue;
       const ex = e.x*TILE, ey = e.y*TILE;
-      ctx.fillStyle = "#a6ff6a";
-      ctx.beginPath();
-      ctx.arc(ex+TILE/2, ey+TILE/2, TILE*0.26, 0, Math.PI*2);
-      ctx.fill();
 
-      // tiny shadow
       ctx.fillStyle = "rgba(0,0,0,0.20)";
       ctx.beginPath();
       ctx.ellipse(ex+TILE/2, ey+TILE/2 + 10, TILE*0.22, TILE*0.10, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle = "#a6ff6a";
+      ctx.beginPath();
+      ctx.arc(ex+TILE/2, ey+TILE/2, TILE*0.26, 0, Math.PI*2);
       ctx.fill();
     }
 
     // player (blink while invincible)
     const blinking = t < player.invUntil && Math.floor(t/120) % 2 === 0;
-
     if (!blinking){
       const px = player.x*TILE, py = player.y*TILE;
 
-      // shadow
       ctx.fillStyle = "rgba(0,0,0,0.22)";
       ctx.beginPath();
       ctx.ellipse(px+TILE/2, py+TILE/2 + 10, TILE*0.22, TILE*0.10, 0, 0, Math.PI*2);
@@ -451,18 +767,9 @@
       ctx.fill();
     }
 
-    // end shake scope
-    ctx.restore();
+    ctx.restore(); // shake end
 
-    // HUD on top (not shaking)
     drawHUD();
-
-    // Overlays
-    if (!player.alive){
-      drawOverlay("GAME OVER", "R ile reset");
-    } else if (!LEVELS[currentLevel]){
-      drawOverlay("BİTTİ!", "R ile tekrar başlat");
-    }
   }
 
   // ---- Update loop ----
@@ -477,8 +784,10 @@
     if (screenShake > 0) screenShake -= dt;
     if (screenShake < 0) screenShake = 0;
 
+    // If game finished all levels
     if (!LEVELS[currentLevel]){
       draw();
+      drawOverlay("BİTTİ!", "R ile tekrar başlat");
       requestAnimationFrame(tick);
       return;
     }
@@ -502,7 +811,10 @@
       if (flames[i].until < t) flames.splice(i,1);
     }
 
-    // Late checks: standing on flame => damage
+    // Sudden death (panic!)
+    applySuddenDeath(t);
+
+    // Standing on flame => damage
     if (player.alive && flames.some(f => f.x===player.x && f.y===player.y && f.until>t)){
       damagePlayer();
     }
@@ -517,47 +829,82 @@
       }
     }
 
+    // pickups
+    if (player.alive) updatePickups();
+
     const aliveEnemies = enemies.filter(e => e.alive).length;
 
-    // Level clear
-    if (player.alive && aliveEnemies === 0 && levelClearedAt === 0){
-      levelClearedAt = t;
+    // Exit activation rule: enemies must be cleared (classic feel)
+    if (aliveEnemies === 0) exitActive = true;
+
+    // Win condition: key + exit active + standing on door
+    if (player.alive && exitActive && hasKey && player.x===exitPos.x && player.y===exitPos.y){
+      levelClearedAt = t; // play a tiny pause
       player.invUntil = t + 1200;
     }
-    if (levelClearedAt && t - levelClearedAt > 900){
+
+    if (levelClearedAt && t - levelClearedAt > 650){
       currentLevel += 1;
       levelClearedAt = 0;
       loadLevel(currentLevel);
     }
 
-    // UI text (panel)
+    // Panel status
+    const L = LEVELS[currentLevel];
+    const left = Math.max(0, (L.timeMs ?? 60_000) - (t - levelStartAt));
+    const sec = Math.ceil(left/1000);
+
     if (!player.alive){
-      statusEl.textContent =
-        `GAME OVER — Can bitti. (R ile reset)\n` +
-        `Level: ${currentLevel+1}`;
+      statusEl.textContent = `GAME OVER — Can bitti. (R ile reset)`;
     } else if (levelClearedAt){
-      statusEl.textContent =
-        `Level ${currentLevel+1} tamamlandı! Sonraki levele geçiliyor...\n` +
-        `Can: ${player.lives} | Kalan düşman: ${aliveEnemies}`;
+      statusEl.textContent = `Level tamam! Sonraki levele geçiliyor...`;
     } else {
       statusEl.textContent =
-        `Level: ${currentLevel+1} | Can: ${player.lives} | Kalan düşman: ${aliveEnemies}`;
+        `Hedef: Anahtar(${hasKey?"✅":"❌"}) + Düşman(${aliveEnemies}) + Kapı(${exitActive?"Açık":"Kilitli"})\n` +
+        `Süre: ${sec}s  (0 olunca Sudden Death)`;
     }
 
     draw();
+
+    if (!player.alive){
+      drawOverlay("GAME OVER", "R ile reset");
+    } else if (levelClearedAt){
+      drawOverlay("LEVEL TAMAM!", "Kapıya ulaştın");
+    } else if (exitActive && !hasKey){
+      // subtle hint overlay text not needed; status is enough
+    }
+
     requestAnimationFrame(tick);
   }
 
   function reset(){
+    // hard reset (classic)
     location.reload();
   }
 
-  // start
+  // Polyfill for roundRect in some browsers
+  if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function(x,y,w,h,r){
+      const min = Math.min(w,h)/2;
+      if (r > min) r = min;
+      this.beginPath();
+      this.moveTo(x+r, y);
+      this.arcTo(x+w, y, x+w, y+h, r);
+      this.arcTo(x+w, y+h, x, y+h, r);
+      this.arcTo(x, y+h, x, y, r);
+      this.arcTo(x, y, x+w, y, r);
+      this.closePath();
+      return this;
+    };
+  }
+
+  // Start
   loadLevel(currentLevel);
   requestAnimationFrame(tick);
 })();
 </script>
 </body>
 </html>
+
 
 
