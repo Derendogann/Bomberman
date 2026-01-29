@@ -33,6 +33,10 @@
   const ctx = canvas.getContext("2d");
   const statusEl = document.getElementById("status");
 
+  const VERSION = "v2.1";
+  let screenShake = 0;  // ms
+  let shakeAmp = 0;     // px
+
   // ---- Grid / tiles ----
   const TILE = 40;                 // 16x16 => 640px
   const W = 16, H = 16;
@@ -131,25 +135,21 @@
   function loadLevel(idx){
     const L = LEVELS[idx];
     if (!L){
-      // Game completed
       statusEl.textContent = "Tebrikler! Tüm levellar bitti. R ile tekrar başlat.";
       return;
     }
 
-    // Reset transient stuff
     bombs.length = 0;
     flames.length = 0;
 
     map = parseLevelMap(L.map);
 
-    // Player spawn
     player.spawn = { ...L.playerSpawn };
     player.x = player.spawn.x;
     player.y = player.spawn.y;
     player.alive = true;
-    player.invUntil = now() + 800; // küçük başlangıç dokunulmazlığı
+    player.invUntil = now() + 800;
 
-    // Enemies
     enemies = L.enemies.map(e => ({
       x: e.x, y: e.y,
       alive: true,
@@ -174,12 +174,15 @@
 
     player.lives -= 1;
 
+    // küçük hit feedback
+    screenShake = 120;
+    shakeAmp = 4;
+
     if (player.lives <= 0){
       player.alive = false;
       return;
     }
 
-    // Respawn + invincibility
     player.x = player.spawn.x;
     player.y = player.spawn.y;
     player.invUntil = t + 1500;
@@ -204,16 +207,18 @@
   function addFlame(x,y, duration=250){
     flames.push({x,y, until: now() + duration});
 
-    // Player hit
     if (player.x===x && player.y===y) damagePlayer();
 
-    // Enemy hit
     for (const e of enemies){
       if (e.alive && e.x===x && e.y===y) e.alive = false;
     }
   }
 
   function explodeBomb(b){
+    // explosion feedback
+    screenShake = 160;
+    shakeAmp = 6;
+
     addFlame(b.x, b.y);
 
     const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
@@ -233,7 +238,7 @@
 
         const other = bombs.find(ob => ob.x===nx && ob.y===ny);
         if (other){
-          other.placedAt = -999999; // chain
+          other.placedAt = -999999;
         }
       }
     }
@@ -257,7 +262,7 @@
         }
       }
 
-      e.moveCd = 170; // enemy speed
+      e.moveCd = 170;
     }
   }
 
@@ -313,25 +318,71 @@
   function drawTile(x,y,type){
     const px = x*TILE, py = y*TILE;
 
-    ctx.fillStyle = "#151b33";
+    // ground
+    ctx.fillStyle = "#141a31";
     ctx.fillRect(px, py, TILE, TILE);
 
-    ctx.strokeStyle = "rgba(255,255,255,0.04)";
+    // MUCH softer grid (optional)
+    ctx.strokeStyle = "rgba(255,255,255,0.015)";
     ctx.strokeRect(px+0.5, py+0.5, TILE-1, TILE-1);
 
     if (type === T.WALL){
       ctx.fillStyle = "#2d3568";
       ctx.fillRect(px+2, py+2, TILE-4, TILE-4);
+
+      // shadow strip
+      ctx.fillStyle = "rgba(0,0,0,0.18)";
+      ctx.fillRect(px+2, py+TILE-6, TILE-4, 4);
     } else if (type === T.BOX){
       ctx.fillStyle = "#7a4c2e";
       ctx.fillRect(px+4, py+4, TILE-8, TILE-8);
-      ctx.fillStyle = "rgba(255,255,255,0.1)";
+      ctx.fillStyle = "rgba(255,255,255,0.10)";
       ctx.fillRect(px+8, py+8, TILE-16, TILE-16);
+
+      // shadow strip
+      ctx.fillStyle = "rgba(0,0,0,0.18)";
+      ctx.fillRect(px+4, py+TILE-8, TILE-8, 4);
     }
+  }
+
+  function drawHUD(){
+    const aliveEnemies = enemies.filter(e => e.alive).length;
+
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(10, 10, 320, 74);
+
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#eaeaea";
+    ctx.font = "16px system-ui";
+    ctx.fillText(`Mini Bomberman ${VERSION}`, 20, 34);
+    ctx.fillText(`Level: ${currentLevel + 1}   Can: ${player.lives}   Düşman: ${aliveEnemies}`, 20, 58);
+    ctx.restore();
+  }
+
+  function drawOverlay(title, subtitle){
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.60)";
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = "#fff";
+    ctx.font = "30px system-ui";
+    ctx.fillText(title, 210, 310);
+    ctx.font = "16px system-ui";
+    ctx.fillText(subtitle, 230, 342);
+    ctx.restore();
   }
 
   function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // screen shake
+    ctx.save();
+    if (screenShake > 0){
+      const ax = (Math.random()*2 - 1) * shakeAmp;
+      const ay = (Math.random()*2 - 1) * shakeAmp;
+      ctx.translate(ax, ay);
+    }
 
     for (let y=0; y<H; y++){
       for (let x=0; x<W; x++){
@@ -339,23 +390,30 @@
       }
     }
 
-    // bombs
+    // bombs (pulsing)
+    const t = now();
     for (const b of bombs){
       const cx = b.x*TILE + TILE/2, cy = b.y*TILE + TILE/2;
+
+      const pulse = 1 + 0.12 * Math.sin((t - b.placedAt) / 90);
+      const r = TILE * 0.28 * pulse;
+
       ctx.fillStyle = "#111";
-      ctx.beginPath(); ctx.arc(cx, cy, TILE*0.28, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.fill();
       ctx.fillStyle = "#ffdd55";
       ctx.beginPath(); ctx.arc(cx+6, cy-6, TILE*0.08, 0, Math.PI*2); ctx.fill();
     }
 
-    // flames
-    const t = now();
+    // flames (flicker)
     for (const f of flames){
       if (f.until < t) continue;
       const px = f.x*TILE, py = f.y*TILE;
-      ctx.fillStyle = "rgba(255,255,255,0.10)";
+
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
       ctx.fillRect(px+1, py+1, TILE-2, TILE-2);
-      ctx.fillStyle = "rgba(255,170,40,0.55)";
+
+      const flick = 0.45 + 0.15 * Math.sin((t + (f.x*13 + f.y*7)) / 35);
+      ctx.fillStyle = `rgba(255,170,40,${flick})`;
       ctx.fillRect(px+3, py+3, TILE-6, TILE-6);
     }
 
@@ -367,18 +425,43 @@
       ctx.beginPath();
       ctx.arc(ex+TILE/2, ey+TILE/2, TILE*0.26, 0, Math.PI*2);
       ctx.fill();
+
+      // tiny shadow
+      ctx.fillStyle = "rgba(0,0,0,0.20)";
+      ctx.beginPath();
+      ctx.ellipse(ex+TILE/2, ey+TILE/2 + 10, TILE*0.22, TILE*0.10, 0, 0, Math.PI*2);
+      ctx.fill();
     }
 
     // player (blink while invincible)
-    const t2 = now();
-    const blinking = t2 < player.invUntil && Math.floor(t2/120) % 2 === 0;
+    const blinking = t < player.invUntil && Math.floor(t/120) % 2 === 0;
 
     if (!blinking){
       const px = player.x*TILE, py = player.y*TILE;
+
+      // shadow
+      ctx.fillStyle = "rgba(0,0,0,0.22)";
+      ctx.beginPath();
+      ctx.ellipse(px+TILE/2, py+TILE/2 + 10, TILE*0.22, TILE*0.10, 0, 0, Math.PI*2);
+      ctx.fill();
+
       ctx.fillStyle = player.alive ? "#65d6ff" : "#ff5577";
       ctx.beginPath();
       ctx.arc(px+TILE/2, py+TILE/2, TILE*0.28, 0, Math.PI*2);
       ctx.fill();
+    }
+
+    // end shake scope
+    ctx.restore();
+
+    // HUD on top (not shaking)
+    drawHUD();
+
+    // Overlays
+    if (!player.alive){
+      drawOverlay("GAME OVER", "R ile reset");
+    } else if (!LEVELS[currentLevel]){
+      drawOverlay("BİTTİ!", "R ile tekrar başlat");
     }
   }
 
@@ -390,7 +473,10 @@
     const t = now();
     const dt = t - last; last = t;
 
-    // If game finished all levels
+    // decay shake
+    if (screenShake > 0) screenShake -= dt;
+    if (screenShake < 0) screenShake = 0;
+
     if (!LEVELS[currentLevel]){
       draw();
       requestAnimationFrame(tick);
@@ -400,7 +486,6 @@
     handleMovement(dt);
     handleActions();
 
-    // enemies
     if (player.alive) updateEnemies(dt);
 
     // bomb fuses
@@ -445,7 +530,7 @@
       loadLevel(currentLevel);
     }
 
-    // UI text
+    // UI text (panel)
     if (!player.alive){
       statusEl.textContent =
         `GAME OVER — Can bitti. (R ile reset)\n` +
@@ -474,4 +559,5 @@
 </script>
 </body>
 </html>
+
 
