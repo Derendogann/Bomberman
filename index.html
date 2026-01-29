@@ -1018,6 +1018,8 @@
     player.y = player.spawn.y;
     player.alive = true;
     player.invUntil = now() + 900;
+    player.lives = 3; // her level başında can reset
+
 
     addBoxes(L.boxDensity, player.spawn);
 
