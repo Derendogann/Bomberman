@@ -19,9 +19,10 @@
       <h2>Mini Bomberman</h2>
       <p>
         Hareket: <span class="kbd">WASD</span> / <span class="kbd">←↑↓→</span><br/>
-        Bomba: <span class="kbd">Space</span>
+        Bomba: <span class="kbd">Space</span><br/>
+        Reset: <span class="kbd">R</span>
       </p>
-      <p>Duvarlar kırılmaz, kutular kırılır. Patlamaya yakalanırsan ölürsün (R ile reset).</p>
+      <p>Duvarlar kırılmaz, kutular kırılır. Düşmanlar bitince sonraki levele geçersin.</p>
       <p id="status"></p>
     </div>
   </div>
@@ -36,49 +37,128 @@
   const TILE = 40;                 // 16x16 => 640px
   const W = 16, H = 16;
 
-  // Tile types
   const T = { EMPTY:0, WALL:1, BOX:2 };
 
-  // Create classic-ish Bomberman map:
-  // - border walls
-  // - checkerboard inner walls
-  // - random boxes
-  const map = Array.from({length:H}, (_, y) =>
-    Array.from({length:W}, (_, x) => {
-      if (x===0 || y===0 || x===W-1 || y===H-1) return T.WALL;
-      if (x%2===0 && y%2===0) return T.WALL;
-      return T.EMPTY;
-    })
-  );
+  // ---- Time ----
+  const now = () => performance.now();
 
-  // Keep a "safe spawn" region for player
-  const safe = new Set(["1,1","1,2","2,1"]);
-
-  // Add boxes randomly
-  for (let y=1; y<H-1; y++){
-    for (let x=1; x<W-1; x++){
-      const key = `${x},${y}`;
-      if (safe.has(key)) continue;
-      if (map[y][x] === T.EMPTY && Math.random() < 0.55) map[y][x] = T.BOX;
+  // ---- Level definitions ----
+  // Legend:
+  // # = WALL, b = BOX, . = EMPTY
+  const LEVELS = [
+    {
+      map: [
+        "################",
+        "#..bbbb..b.....#",
+        "#.#.#.#.#.#.#..#",
+        "#..b....b...b..#",
+        "#.#.#.#.#.#.#..#",
+        "#..b....b...b..#",
+        "#.#.#.#.#.#.#..#",
+        "#..b....b...b..#",
+        "#.#.#.#.#.#.#..#",
+        "#..b....b...b..#",
+        "#.#.#.#.#.#.#..#",
+        "#..b....b...b..#",
+        "#.#.#.#.#.#.#..#",
+        "#.....b....b...#",
+        "#..............#",
+        "################",
+      ],
+      playerSpawn: { x: 1, y: 1 },
+      enemies: [{ x: 14, y: 14 }, { x: 14, y: 1 }],
+    },
+    {
+      map: [
+        "################",
+        "#..bbbb..bbbb..#",
+        "#.#.#.#.#.#.#..#",
+        "#..b..b.....b..#",
+        "#.#.#.#.#.#.#..#",
+        "#..b....bbb.b..#",
+        "#.#.#.#.#.#.#..#",
+        "#..b..b.....b..#",
+        "#.#.#.#.#.#.#..#",
+        "#..b....bbb.b..#",
+        "#.#.#.#.#.#.#..#",
+        "#..b..b.....b..#",
+        "#.#.#.#.#.#.#..#",
+        "#..bbbb..bbbb..#",
+        "#..............#",
+        "################",
+      ],
+      playerSpawn: { x: 1, y: 1 },
+      enemies: [{ x: 14, y: 14 }, { x: 14, y: 1 }, { x: 1, y: 14 }],
     }
-  }
+  ];
+
+  let currentLevel = 0;
+
+  // ---- World state (changes per level) ----
+  let map = [];
+  let enemies = [];
 
   // ---- Player ----
   const player = {
-    x: 1, y: 1,            // tile coords
+    x: 1, y: 1,
     alive: true,
+    lives: 3,
+    invUntil: 0,
+    spawn: { x: 1, y: 1 },
+
     bombsMax: 1,
     bombRange: 2,
   };
 
   // ---- Bombs / flames ----
-  const bombs = [];   // {x,y, placedAt, fuseMs}
+  const bombs = [];   // {x,y, placedAt, fuseMs, range, owner}
   const flames = [];  // {x,y, until}
 
-  const now = () => performance.now();
+  function parseLevelMap(lines){
+    const m = Array.from({length:H}, () => Array.from({length:W}, () => T.EMPTY));
+    for (let y=0; y<H; y++){
+      const row = lines[y] || "";
+      for (let x=0; x<W; x++){
+        const ch = row[x] || ".";
+        if (ch === "#") m[y][x] = T.WALL;
+        else if (ch === "b") m[y][x] = T.BOX;
+        else m[y][x] = T.EMPTY;
+      }
+    }
+    return m;
+  }
 
+  function loadLevel(idx){
+    const L = LEVELS[idx];
+    if (!L){
+      // Game completed
+      statusEl.textContent = "Tebrikler! Tüm levellar bitti. R ile tekrar başlat.";
+      return;
+    }
+
+    // Reset transient stuff
+    bombs.length = 0;
+    flames.length = 0;
+
+    map = parseLevelMap(L.map);
+
+    // Player spawn
+    player.spawn = { ...L.playerSpawn };
+    player.x = player.spawn.x;
+    player.y = player.spawn.y;
+    player.alive = true;
+    player.invUntil = now() + 800; // küçük başlangıç dokunulmazlığı
+
+    // Enemies
+    enemies = L.enemies.map(e => ({
+      x: e.x, y: e.y,
+      alive: true,
+      moveCd: 0
+    }));
+  }
+
+  // ---- Collision ----
   function isBlocked(x,y){
-    // outside or wall/box or bomb (bomb blocks movement)
     if (x<0||y<0||x>=W||y>=H) return true;
     if (map[y][x] === T.WALL) return true;
     if (map[y][x] === T.BOX) return true;
@@ -86,12 +166,30 @@
     return false;
   }
 
+  // ---- Damage / Lives ----
+  function damagePlayer(){
+    const t = now();
+    if (!player.alive) return;
+    if (t < player.invUntil) return;
+
+    player.lives -= 1;
+
+    if (player.lives <= 0){
+      player.alive = false;
+      return;
+    }
+
+    // Respawn + invincibility
+    player.x = player.spawn.x;
+    player.y = player.spawn.y;
+    player.invUntil = t + 1500;
+  }
+
+  // ---- Bomb placement ----
   function placeBomb(){
     if (!player.alive) return;
     const active = bombs.filter(b => b.owner === "p").length;
     if (active >= player.bombsMax) return;
-
-    // if already bomb on tile, ignore
     if (bombs.some(b => b.x===player.x && b.y===player.y)) return;
 
     bombs.push({
@@ -105,17 +203,19 @@
 
   function addFlame(x,y, duration=250){
     flames.push({x,y, until: now() + duration});
-    // If player in flame => dead
-    if (player.alive && player.x===x && player.y===y) {
-      player.alive = false;
+
+    // Player hit
+    if (player.x===x && player.y===y) damagePlayer();
+
+    // Enemy hit
+    for (const e of enemies){
+      if (e.alive && e.x===x && e.y===y) e.alive = false;
     }
   }
 
   function explodeBomb(b){
-    // Center
     addFlame(b.x, b.y);
 
-    // 4 directions
     const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
     for (const [dx,dy] of dirs){
       for (let i=1; i<=b.range; i++){
@@ -127,17 +227,37 @@
         addFlame(nx,ny);
 
         if (map[ny][nx] === T.BOX){
-          // destroy box and stop propagation
           map[ny][nx] = T.EMPTY;
           break;
         }
 
-        // Chain reaction: ignite other bombs
         const other = bombs.find(ob => ob.x===nx && ob.y===ny);
         if (other){
-          other.placedAt = -999999; // force explode next update
+          other.placedAt = -999999; // chain
         }
       }
+    }
+  }
+
+  // ---- Enemies ----
+  function updateEnemies(dt){
+    for (const e of enemies){
+      if (!e.alive) continue;
+      e.moveCd -= dt;
+      if (e.moveCd > 0) continue;
+
+      const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+      dirs.sort(() => Math.random() - 0.5);
+
+      for (const [dx,dy] of dirs){
+        const nx = e.x + dx, ny = e.y + dy;
+        if (!isBlocked(nx, ny)){
+          e.x = nx; e.y = ny;
+          break;
+        }
+      }
+
+      e.moveCd = 170; // enemy speed
     }
   }
 
@@ -169,8 +289,6 @@
 
     if (dx!==0 || dy!==0){
       const nx = player.x + dx, ny = player.y + dy;
-      // allow stepping off a bomb tile you placed (classic behavior),
-      // but still block entering bomb tiles.
       const enteringBomb = bombs.some(b => b.x===nx && b.y===ny);
       const blocked = (nx<0||ny<0||nx>=W||ny>=H) ||
                       map[ny][nx] === T.WALL ||
@@ -179,7 +297,7 @@
 
       if (!blocked){
         player.x = nx; player.y = ny;
-        moveCooldown = 90; // ms per tile
+        moveCooldown = 90;
       }
     }
   }
@@ -187,7 +305,6 @@
   function handleActions(){
     if (keys.has("Space")){
       placeBomb();
-      // prevent "hold-to-spam"
       keys.delete("Space");
     }
   }
@@ -196,11 +313,9 @@
   function drawTile(x,y,type){
     const px = x*TILE, py = y*TILE;
 
-    // ground
     ctx.fillStyle = "#151b33";
     ctx.fillRect(px, py, TILE, TILE);
 
-    // subtle grid
     ctx.strokeStyle = "rgba(255,255,255,0.04)";
     ctx.strokeRect(px+0.5, py+0.5, TILE-1, TILE-1);
 
@@ -238,26 +353,55 @@
     for (const f of flames){
       if (f.until < t) continue;
       const px = f.x*TILE, py = f.y*TILE;
+      ctx.fillStyle = "rgba(255,255,255,0.10)";
+      ctx.fillRect(px+1, py+1, TILE-2, TILE-2);
       ctx.fillStyle = "rgba(255,170,40,0.55)";
       ctx.fillRect(px+3, py+3, TILE-6, TILE-6);
     }
 
-    // player
-    const px = player.x*TILE, py = player.y*TILE;
-    ctx.fillStyle = player.alive ? "#65d6ff" : "#ff5577";
-    ctx.beginPath();
-    ctx.arc(px+TILE/2, py+TILE/2, TILE*0.28, 0, Math.PI*2);
-    ctx.fill();
+    // enemies
+    for (const e of enemies){
+      if (!e.alive) continue;
+      const ex = e.x*TILE, ey = e.y*TILE;
+      ctx.fillStyle = "#a6ff6a";
+      ctx.beginPath();
+      ctx.arc(ex+TILE/2, ey+TILE/2, TILE*0.26, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // player (blink while invincible)
+    const t2 = now();
+    const blinking = t2 < player.invUntil && Math.floor(t2/120) % 2 === 0;
+
+    if (!blinking){
+      const px = player.x*TILE, py = player.y*TILE;
+      ctx.fillStyle = player.alive ? "#65d6ff" : "#ff5577";
+      ctx.beginPath();
+      ctx.arc(px+TILE/2, py+TILE/2, TILE*0.28, 0, Math.PI*2);
+      ctx.fill();
+    }
   }
 
   // ---- Update loop ----
   let last = now();
+  let levelClearedAt = 0;
+
   function tick(){
     const t = now();
     const dt = t - last; last = t;
 
+    // If game finished all levels
+    if (!LEVELS[currentLevel]){
+      draw();
+      requestAnimationFrame(tick);
+      return;
+    }
+
     handleMovement(dt);
     handleActions();
+
+    // enemies
+    if (player.alive) updateEnemies(dt);
 
     // bomb fuses
     for (let i=bombs.length-1; i>=0; i--){
@@ -273,26 +417,61 @@
       if (flames[i].until < t) flames.splice(i,1);
     }
 
-    // if player standing on flame (late check)
+    // Late checks: standing on flame => damage
     if (player.alive && flames.some(f => f.x===player.x && f.y===player.y && f.until>t)){
-      player.alive = false;
+      damagePlayer();
     }
 
-    statusEl.textContent = player.alive
-      ? "Hayattasın. Kutuları kır, patlamadan kaç."
-      : "Öldün. Reset için R.";
+    // Enemy touches player => damage
+    if (player.alive){
+      for (const e of enemies){
+        if (e.alive && e.x===player.x && e.y===player.y){
+          damagePlayer();
+          break;
+        }
+      }
+    }
+
+    const aliveEnemies = enemies.filter(e => e.alive).length;
+
+    // Level clear
+    if (player.alive && aliveEnemies === 0 && levelClearedAt === 0){
+      levelClearedAt = t;
+      player.invUntil = t + 1200;
+    }
+    if (levelClearedAt && t - levelClearedAt > 900){
+      currentLevel += 1;
+      levelClearedAt = 0;
+      loadLevel(currentLevel);
+    }
+
+    // UI text
+    if (!player.alive){
+      statusEl.textContent =
+        `GAME OVER — Can bitti. (R ile reset)\n` +
+        `Level: ${currentLevel+1}`;
+    } else if (levelClearedAt){
+      statusEl.textContent =
+        `Level ${currentLevel+1} tamamlandı! Sonraki levele geçiliyor...\n` +
+        `Can: ${player.lives} | Kalan düşman: ${aliveEnemies}`;
+    } else {
+      statusEl.textContent =
+        `Level: ${currentLevel+1} | Can: ${player.lives} | Kalan düşman: ${aliveEnemies}`;
+    }
 
     draw();
     requestAnimationFrame(tick);
   }
 
   function reset(){
-    // Quick page reload is easiest for this demo
     location.reload();
   }
 
+  // start
+  loadLevel(currentLevel);
   requestAnimationFrame(tick);
 })();
 </script>
 </body>
 </html>
+
