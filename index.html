@@ -728,7 +728,14 @@
   function applySuddenDeath(t){
     const L = LEVELS[currentLevel];
     const timeLeft = (L.timeMs ?? 60_000) - (t - levelStartAt);
-    if (timeLeft > 0) return;
+    if (timeLeft > 0){
+  suddenDeathPlayed = false;
+  return;
+}
+    if (!suddenDeathPlayed){
+  playSuddenDeathSound();
+  suddenDeathPlayed = true;
+}
 
     const k = Math.min(7, Math.floor((-timeLeft)/700));
     for (let x=0; x<W; x++){
