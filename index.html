@@ -847,42 +847,49 @@
 
     // Exit tile
     // Exit tile (emoji + pulse)
-{
+
+ {
   const px = exitPos.x * TILE;
   const py = exitPos.y * TILE + HUD_HEIGHT;
   const cx = px + TILE / 2;
   const cy = py + TILE / 2;
 
   ctx.save();
+
+  // her zaman görünür zemin
+  ctx.fillStyle = exitActive
+    ? "rgba(255, 209, 102, 0.25)"
+    : "rgba(80, 140, 255, 0.25)";
+
+  ctx.fillRect(px + 3, py + 3, TILE - 6, TILE - 6);
+
+  // net border
+  ctx.strokeStyle = exitActive ? "#ffd166" : "#5aa0ff";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(px + 3, py + 3, TILE - 6, TILE - 6);
+
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
 
   if (exitActive) {
     const pulse = 0.5 + 0.5 * Math.sin(now() / 180);
 
-    // arkadaki parlama halkası
     ctx.beginPath();
-    ctx.fillStyle = `rgba(255, 209, 102, ${0.18 + pulse * 0.18})`;
+    ctx.fillStyle = `rgba(255, 209, 102, ${0.2 + pulse * 0.3})`;
     ctx.arc(cx, cy, 18 + pulse * 6, 0, Math.PI * 2);
     ctx.fill();
 
-    // glow
     ctx.shadowColor = "#ffd166";
-    ctx.shadowBlur = 18 + pulse * 8;
+    ctx.shadowBlur = 20;
 
     ctx.font = "30px system-ui";
     ctx.fillText("🚪", cx, cy);
   } else {
-    ctx.beginPath();
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
-    ctx.arc(cx, cy, 16, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.shadowColor = "#666";
-    ctx.shadowBlur = 6;
+    ctx.shadowColor = "#5aa0ff";
+    ctx.shadowBlur = 10;
 
     ctx.font = "28px system-ui";
-    ctx.fillText("🚫", cx, cy);
+    ctx.fillText("🚪", cx, cy);
   }
 
   ctx.restore();
