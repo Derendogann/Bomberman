@@ -1035,9 +1035,9 @@
     } else if (levelClearedAt){
       statusEl.textContent = `Level tamam! Sonraki levele geçiliyor...`;
     } else {
-      statusEl.textContent =
-     `Hedef: Anahtar(${hasKey?"✅":"❌"}) + Düşman(${aliveEnemies === 0 ? "✅" : "❌"})` +
-     `Süre: ${sec}s  (0 olunca Sudden Death)`;
+      statusEl.innerHTML =
+  `Hedef: Anahtar(${hasKey?"✅":"❌"}) + Düşman(${aliveEnemies === 0 ? "✅" : "❌"})<br>` +
+  `Süre: ${sec}s  (0 olunca Sudden Death)`;
     }
 
     draw();
