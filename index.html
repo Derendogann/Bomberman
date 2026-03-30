@@ -105,28 +105,30 @@
   function playSuddenDeathSound(){
   if (!audioCtx) return;
 
+  const now = audioCtx.currentTime;
+
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
-  const filter = audioCtx.createBiquadFilter();
 
-  osc.type = "sawtooth";
+  osc.type = "square";
 
-  osc.frequency.setValueAtTime(220, audioCtx.currentTime);
-  osc.frequency.exponentialRampToValueAtTime(60, audioCtx.currentTime + 0.6);
+  // 🔥 önce alarm (yüksek)
+  osc.frequency.setValueAtTime(880, now);
 
-  filter.type = "lowpass";
-  filter.frequency.value = 400;
+  // 💀 sonra düşüş (korku efekti)
+  osc.frequency.exponentialRampToValueAtTime(90, now + 0.5);
 
-  gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.6);
+  // volume envelope
+  gain.gain.setValueAtTime(0.08, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
 
-  osc.connect(filter);
-  filter.connect(gain);
+  osc.connect(gain);
   gain.connect(audioCtx.destination);
 
-  osc.start(audioCtx.currentTime);
-  osc.stop(audioCtx.currentTime + 0.6);
+  osc.start(now);
+  osc.stop(now + 0.5);
 }
+
 
   const VERSION = "v4.0";
   const TILE = 40;
