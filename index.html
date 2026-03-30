@@ -15,7 +15,7 @@
 </head>
 <body>
   <div class="wrap">
-    <canvas id="c" width="640" height="640"></canvas>
+    <canvas id="c" width="640" height="720"></canvas>
     <div class="panel">
       <h2>Mini Bomberman</h2>
       <p>
@@ -48,10 +48,41 @@
   const canvas = document.getElementById("c");
   const ctx = canvas.getContext("2d");
   const statusEl = document.getElementById("status");
+    let audioCtx = null;
+  let lastCountdownBeep = null;
 
-  const VERSION = "v4.0";
+  function ensureAudio(){
+    if (!audioCtx){
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx) audioCtx = new Ctx();
+    }
+    if (audioCtx && audioCtx.state === "suspended"){
+      audioCtx.resume();
+    }
+  }
+
+  function playBeep(freq = 880, duration = 0.08, volume = 0.03){
+    if (!audioCtx) return;
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = "square";
+    osc.frequency.value = freq;
+    gain.gain.value = volume;
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    const start = audioCtx.currentTime;
+    osc.start(start);
+    osc.stop(start + duration);
+  }
+
+  const VERSION = "v4.1";
   const TILE = 40;
   const W = 16, H = 16;
+  const HUD_HEIGHT = 80;
 
   const T = { EMPTY:0, WALL:1, BOX:2 };
   const ETYPE = { NORMAL:"NORMAL", FAST:"FAST", GHOST:"GHOST" };
@@ -100,7 +131,7 @@
 
     bombsMax: 1,
     bombRange: 2,
-    moveDelay: 90,
+    moveDelay: 105,
   };
 
   // ---- Map helpers ----
@@ -592,9 +623,10 @@
   // ---- Input ----
   const keys = new Set();
   window.addEventListener("keydown", (e) => {
-    keys.add(e.code);
-    if (e.code === "Space") e.preventDefault();
-    if (e.code === "KeyR") reset();
+  keys.add(e.code);
+  ensureAudio();
+  if (e.code === "Space") e.preventDefault();
+  if (e.code === "KeyR") reset();
   });
   window.addEventListener("keyup", (e) => keys.delete(e.code));
 
@@ -683,7 +715,7 @@
 
     ctx.save();
     // HUD area near top-right of HUD block
-    const cx = 405, cy = 52;
+    const cx = 560, cy = 36;
     ctx.globalAlpha = 0.95;
 
     ctx.fillStyle = "rgba(255,255,255,0.20)";
@@ -708,13 +740,13 @@
     ctx.save();
     ctx.fillStyle = "rgba(255,255,255,0.85)";
     ctx.font = "12px system-ui";
-    ctx.fillText("KEY", 393, 80);
+    ctx.fillText("KEY", 548, 64);
     ctx.restore();
   }
 
   // ---- Render ----
   function drawTile(x,y,type){
-    const px = x*TILE, py = y*TILE;
+    const px = x*TILE, py = y*TILE + HUD_HEIGHT;;
 
     ctx.fillStyle = "#141a31";
     ctx.fillRect(px, py, TILE, TILE);
@@ -738,28 +770,46 @@
   }
 
   function drawHUD(){
-    const aliveEnemies = enemies.filter(e => e.alive).length;
-    const L = LEVELS[currentLevel];
-    const left = Math.max(0, (L.timeMs ?? 60_000) - (now() - levelStartAt));
-    const sec = Math.ceil(left/1000);
+  const aliveEnemies = enemies.filter(e => e.alive).length;
+  const L = LEVELS[currentLevel];
+  const left = Math.max(0, (L.timeMs ?? 60_000) - (now() - levelStartAt));
+  const sec = Math.ceil(left/1000);
 
-    ctx.save();
-    ctx.globalAlpha = 0.92;
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.fillRect(10, 10, 420, 96);
+  ctx.save();
 
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = "#eaeaea";
-    ctx.font = "16px system-ui";
-    ctx.fillText(`Mini Bomberman ${VERSION}`, 20, 34);
-    ctx.fillText(`Level: ${currentLevel + 1}/${LEVELS.length}   Can: ${player.lives}   Düşman: ${aliveEnemies}`, 20, 58);
+  // üst şerit arka planı
+  ctx.fillStyle = "#0b1020";
+  ctx.fillRect(0, 0, canvas.width, HUD_HEIGHT);
 
-    const kd = keyDetectorOn ? "ON" : "OFF";
-    ctx.fillText(`🧨 ${player.bombsMax}   🔥 ${player.bombRange}   ⚡ ${Math.round((90/player.moveDelay)*100)}%   🔑 ${hasKey ? "Var" : "Yok"}   ⏱️ ${sec}s   🧭 ${kd}`, 20, 82);
+  // alt ayırıcı çizgi
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.beginPath();
+  ctx.moveTo(0, HUD_HEIGHT - 0.5);
+  ctx.lineTo(canvas.width, HUD_HEIGHT - 0.5);
+  ctx.stroke();
 
-    ctx.restore();
+  // son 5 saniye kırmızı vurgulu
+  const timeColor = sec <= 5 ? "#ff7b7b" : "#eaeaea";
 
-    drawKeyArrowOnHUD();
+  ctx.fillStyle = "#eaeaea";
+  ctx.font = "16px system-ui";
+  ctx.fillText(`Mini Bomberman ${VERSION}`, 16, 26);
+  ctx.fillText(`Level ${currentLevel + 1}/${LEVELS.length}`, 16, 52);
+
+  ctx.fillText(`❤️ ${player.lives}`, 150, 26);
+  ctx.fillText(`👾 ${aliveEnemies}`, 220, 26);
+  ctx.fillStyle = timeColor;
+  ctx.fillText(`⏱️ ${sec}s`, 300, 26);
+
+  ctx.fillStyle = "#eaeaea";
+  ctx.fillText(`🧨 ${player.bombsMax}`, 150, 52);
+  ctx.fillText(`🔥 ${player.bombRange}`, 220, 52);
+  ctx.fillText(`⚡ ${Math.round((105/player.moveDelay)*100)}%`, 300, 52);
+  ctx.fillText(`🔑 ${hasKey ? "Var" : "Yok"}`, 410, 52);
+
+  ctx.restore();
+
+  drawKeyArrowOnHUD();
   }
 
   function drawOverlay(title, subtitle){
@@ -793,7 +843,7 @@
 
     // Exit tile
     {
-      const px = exitPos.x*TILE, py = exitPos.y*TILE;
+      const px = exitPos.x*TILE, py = exitPos.y*TILE + HUD_HEIGHT;
       ctx.fillStyle = exitActive ? "rgba(180,120,255,0.75)" : "rgba(180,120,255,0.22)";
       ctx.fillRect(px+6, py+6, TILE-12, TILE-12);
       if (exitActive){
@@ -804,7 +854,7 @@
 
     // Pickups
     for (const p of pickups){
-      const px = p.x*TILE, py = p.y*TILE;
+      const px = p.x*TILE, py = p.y*TILE + HUD_HEIGHT;
       if (p.type === "BOMB") ctx.fillStyle = "rgba(255,230,90,0.90)";
       else if (p.type === "RANGE") ctx.fillStyle = "rgba(255,140,60,0.90)";
       else if (p.type === "SPEED") ctx.fillStyle = "rgba(120,255,200,0.90)";
@@ -814,16 +864,15 @@
       ctx.roundRect(px+10, py+10, TILE-20, TILE-20, 6);
       ctx.fill();
 
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.font = "14px system-ui";
-      const label = p.type === "BOMB" ? "B" : p.type === "RANGE" ? "R" : p.type === "SPEED" ? "S" : "K";
-      ctx.fillText(label, px+TILE/2 - 4, py+TILE/2 + 6);
+      ctx.font = "20px system-ui";
+      const label = p.type === "BOMB" ? "🧨" : p.type === "RANGE" ? "🔥" : p.type === "SPEED" ? "⚡" : "🔑";
+      ctx.fillText(label, px + 8, py + 27);
     }
 
     // bombs
     const t = now();
     for (const b of bombs){
-      const cx = b.x*TILE + TILE/2, cy = b.y*TILE + TILE/2;
+      const cx = b.x*TILE + TILE/2, cy = b.y*TILE + TILE/2 + HUD_HEIGHT;
       const pulse = 1 + 0.12 * Math.sin((t - b.placedAt) / 80);
       const r = TILE * 0.28 * pulse;
 
@@ -836,7 +885,7 @@
     // flames
     for (const f of flames){
       if (f.until < t) continue;
-      const px = f.x*TILE, py = f.y*TILE;
+      const px = f.x*TILE, py = f.y*TILE + HUD_HEIGHT;
       ctx.fillStyle = "rgba(255,255,255,0.08)";
       ctx.fillRect(px+1, py+1, TILE-2, TILE-2);
       const flick = 0.45 + 0.18 * Math.sin((t + (f.x*13 + f.y*7)) / 35);
@@ -847,7 +896,7 @@
     // enemies
     for (const e of enemies){
       if (!e.alive) continue;
-      const ex = e.x*TILE, ey = e.y*TILE;
+      const ex = e.x*TILE, ey = e.y*TILE + HUD_HEIGHT;
 
       ctx.fillStyle = "rgba(0,0,0,0.20)";
       ctx.beginPath();
@@ -873,7 +922,7 @@
     // player
     const blinking = t < player.invUntil && Math.floor(t/120) % 2 === 0;
     if (!blinking){
-      const px = player.x*TILE, py = player.y*TILE;
+      const px = player.x*TILE, py = player.y*TILE + HUD_HEIGHT;
 
       ctx.fillStyle = "rgba(0,0,0,0.22)";
       ctx.beginPath();
@@ -967,6 +1016,15 @@
     const L = LEVELS[currentLevel];
     const left = Math.max(0, (L.timeMs ?? 60_000) - (t - levelStartAt));
     const sec = Math.ceil(left/1000);
+
+    if (player.alive && sec <= 5 && sec >= 1 && sec !== lastCountdownBeep){
+      playBeep(sec === 1 ? 1180 : 920, sec === 1 ? 0.12 : 0.08, 0.04);
+      lastCountdownBeep = sec;
+    }
+
+    if (sec > 5 || sec <= 0){
+      lastCountdownBeep = null;
+    }
 
     if (!player.alive){
       statusEl.textContent = `GAME OVER — Can bitti. (R ile reset)`;
