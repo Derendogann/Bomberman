@@ -96,7 +96,7 @@
     { boxDensity: 0.65, enemyPlan: [ETYPE.NORMAL, ETYPE.FAST], enemySpeed: 180, timeMs: 75_000, drops:{BOMB:0.08, RANGE:0.08, SPEED:0.06} },
     { boxDensity: 0.70, enemyPlan: [ETYPE.NORMAL, ETYPE.GHOST], enemySpeed: 175, timeMs: 72_000, drops:{BOMB:0.08, RANGE:0.08, SPEED:0.06} },
     { boxDensity: 0.72, enemyPlan: [ETYPE.NORMAL,ETYPE.FAST, ETYPE.GHOST], enemySpeed: 175, timeMs: 72_000, drops:{BOMB:0.08, RANGE:0.08, SPEED:0.06} },
-    { boxDensity: 0.72, enemyPlan: [ETYPE.FAST,  ETYPE.GHOST, ETYPE.FAST], enemySpeed: 170, timeMs: 72_000, drops:{BOMB:0.08, RANGE:0.08, SPEED:0.06} },
+    { boxDensity: 0.72, enemyPlan: [ETYPE.FAST,  ETYPE.GHOST, ETYPE.FAST], enemySpeed: 175, timeMs: 72_000, drops:{BOMB:0.08, RANGE:0.08, SPEED:0.06} },
     { boxDensity: 0.74, enemyPlan: [ETYPE.NORMAL, ETYPE.NORMAL, ETYPE.GHOST, ETYPE.FAST], enemySpeed: 170, timeMs: 72_000, drops:{BOMB:0.06, RANGE:0.06, SPEED:0.05} },
     {boxDensity: 0.76, enemyPlan: [ETYPE.NORMAL, ETYPE.FAST, ETYPE.GHOST, ETYPE.GHOST],enemySpeed: 165,timeMs: 72_000,drops:{BOMB:0.06, RANGE:0.06, SPEED:0.05}},
   ];
@@ -800,7 +800,7 @@
   ctx.fillText(`Level ${currentLevel + 1}/${LEVELS.length}`, 16, 52);
 
   ctx.fillText(`❤️ ${player.lives}`, 150, 26);
-  ctx.fillText(`👾 ${aliveEnemies}`, 220, 26);
+  ctx.fillText(`👾 ${aliveEnemies === 0 ? "✅" : aliveEnemies}`, 220, 26);
   ctx.fillStyle = timeColor;
   ctx.fillText(`⏱️ ${sec}s`, 300, 26);
 
