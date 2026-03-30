@@ -102,6 +102,31 @@
   osc.start(audioCtx.currentTime);
   osc.stop(audioCtx.currentTime + 0.12);
 }
+  function playSuddenDeathSound(){
+  if (!audioCtx) return;
+
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const filter = audioCtx.createBiquadFilter();
+
+  osc.type = "sawtooth";
+
+  osc.frequency.setValueAtTime(220, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(60, audioCtx.currentTime + 0.6);
+
+  filter.type = "lowpass";
+  filter.frequency.value = 400;
+
+  gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.6);
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + 0.6);
+}
 
   const VERSION = "v4.0";
   const TILE = 40;
@@ -132,6 +157,7 @@
 
   // ---- World state ----
   let currentLevel = 0;
+  let suddenDeathPlayed = false;
   let map = [];
   let enemies = [];
   const bombs = [];
