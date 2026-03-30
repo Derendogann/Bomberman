@@ -1002,9 +1002,9 @@
     const aliveEnemies = enemies.filter(e => e.alive).length;
     if (aliveEnemies === 0) exitActive = true;
 
-    if (player.alive && exitActive && hasKey && player.x===exitPos.x && player.y===exitPos.y){
-      levelClearedAt = t;
-      player.invUntil = t + 1200;
+    if (!levelClearedAt && player.alive && exitActive && hasKey && player.x===exitPos.x && player.y===exitPos.y){
+    levelClearedAt = t;
+    player.invUntil = t + 1200;
     }
 
     if (levelClearedAt && t - levelClearedAt > 650){
