@@ -78,6 +78,30 @@
     osc.start(start);
     osc.stop(start + duration);
   }
+  function playExplosionSound(volume = 0.05){
+  if (!audioCtx) return;
+
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  const filter = audioCtx.createBiquadFilter();
+
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(180, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(55, audioCtx.currentTime + 0.12);
+
+  filter.type = "lowpass";
+  filter.frequency.value = 500;
+
+  gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start(audioCtx.currentTime);
+  osc.stop(audioCtx.currentTime + 0.12);
+}
 
   const VERSION = "v4.0";
   const TILE = 40;
@@ -580,8 +604,9 @@
   }
 
   function explodeBomb(b){
-    screenShake = 160; shakeAmp = 6;
-    addFlame(b.x, b.y);
+   screenShake = 160; shakeAmp = 6;
+   playExplosionSound();
+   addFlame(b.x, b.y);
 
     const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
     for (const [dx,dy] of dirs){
