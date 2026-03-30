@@ -1036,7 +1036,7 @@
       statusEl.textContent = `Level tamam! Sonraki levele geçiliyor...`;
     } else {
       statusEl.textContent =
-        `Hedef: Anahtar(${hasKey?"✅":"❌"}) + Düşman(${aliveEnemies}) + Kapı(${exitActive?"Açık":"Kilitli"})\n` +
+     `Hedef: Anahtar(${hasKey?"✅":"❌"}) + Düşman(${aliveEnemies === 0 ? "✅" : "❌"}) + Kapı(${exitActive ? "✅" : "❌"})` +
         `Süre: ${sec}s  (0 olunca Sudden Death)`;
     }
 
