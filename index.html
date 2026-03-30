@@ -846,14 +846,47 @@
     }
 
     // Exit tile
-    {
-      const px = exitPos.x*TILE, py = exitPos.y*TILE + HUD_HEIGHT;
-      ctx.fillStyle = exitActive ? "rgba(180,120,255,0.75)" : "rgba(180,120,255,0.22)";
-      ctx.fillRect(px+6, py+6, TILE-12, TILE-12);
-      if (exitActive){
-        ctx.fillStyle = "rgba(255,255,255,0.18)";
-        ctx.fillRect(px+12, py+12, TILE-24, TILE-24);
-      }
+    // Exit tile (emoji + pulse)
+{
+  const px = exitPos.x * TILE;
+  const py = exitPos.y * TILE + HUD_HEIGHT;
+  const cx = px + TILE / 2;
+  const cy = py + TILE / 2;
+
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  if (exitActive) {
+    const pulse = 0.5 + 0.5 * Math.sin(now() / 180);
+
+    // arkadaki parlama halkası
+    ctx.beginPath();
+    ctx.fillStyle = `rgba(255, 209, 102, ${0.18 + pulse * 0.18})`;
+    ctx.arc(cx, cy, 18 + pulse * 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // glow
+    ctx.shadowColor = "#ffd166";
+    ctx.shadowBlur = 18 + pulse * 8;
+
+    ctx.font = "30px system-ui";
+    ctx.fillText("🚪", cx, cy);
+  } else {
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.arc(cx, cy, 16, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.shadowColor = "#666";
+    ctx.shadowBlur = 6;
+
+    ctx.font = "28px system-ui";
+    ctx.fillText("🚫", cx, cy);
+  }
+
+  ctx.restore();
+}
     }
 
     // Pickups
