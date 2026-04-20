@@ -723,7 +723,7 @@ function playLevelClearSound(){
   // ---- Pickups ----
   function applyPickup(p){
     if (p.type === "BOMB") player.bombsMax = Math.min(6, player.bombsMax + 1);
-    if (p.type === "RANGE") player.bombRange = Math.min(6, player.bombRange + 1);
+    if (p.type === "RANGE") player.bombRange = Math.min(4, player.bombRange + 1);
     if (p.type === "SPEED") player.moveDelay = Math.max(55, player.moveDelay - 8);
     if (p.type === "KEY"){
   hasKey = true;
